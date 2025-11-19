@@ -7,16 +7,15 @@ from typing import Optional, Dict, Any
 
 app = FastAPI(title="Ghirass Smart Irrigation API")
 
-# ---- CORS (Ø¹Ø´Ø§Ù† Ø§Ù„ÙØ±ÙˆÙ†Øª Ø¥Ù†Ø¯ ÙŠÙ‚Ø¯Ø± ÙŠØªØµÙ„ Ù…Ù† Ø§Ù„Ù…ØªØµÙØ­) ----
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Ù„Ù„Ù…Ø´Ø±ÙˆØ¹ØŒ Ø¹Ø§Ø¯ÙŠ Ù†Ø®Ù„ÙŠÙ‡Ø§ Ù…ÙØªÙˆØ­Ø©
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---- Ø´ÙƒÙ„ Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„ØªÙŠ ÙŠØ±Ø³Ù„Ù‡Ø§ Ø§Ù„Ø±Ø§Ø²Ø¨ÙŠØ±ÙŠ ----
+
 class SensorPayload(BaseModel):
     timestamp: str
     temperature: Optional[float] = None
@@ -28,7 +27,6 @@ class SensorPayload(BaseModel):
     run_sec_this_hour: int
     delta_soil: float
 
-# ---- Ù†Ø®Ø²Ù‘Ù† Ø¢Ø®Ø± Ø­Ø§Ù„Ø© Ù‡Ù†Ø§ ----
 latest_status: Dict[str, Any] = {
     "timestamp": "N/A",
     "temperature": None,
@@ -45,14 +43,12 @@ latest_status: Dict[str, Any] = {
 def root():
     return {"status": "ok", "message": "Ghirass FastAPI backend is running"}
 
-# Ø§Ù„Ø±Ø§Ø²Ø¨ÙŠØ±ÙŠ ÙŠØ±Ø³Ù„ Ù„Ù‡Ù†Ø§ ÙƒÙ„ 1â€“2 Ø«Ø§Ù†ÙŠØ©
 @app.post("/update_sensor")
 def update_sensor(payload: SensorPayload):
     global latest_status
     latest_status = payload.dict()
     return {"status": "updated"}
 
-# Ø§Ù„ÙØ±ÙˆÙ†Øª Ø¥Ù†Ø¯ Ø¹Ù†Ø¯ ØµØ¯ÙŠÙ‚ØªÙƒ ØªÙ‚Ø±Ø£ Ù…Ù† Ù‡Ù†Ø§ ÙˆØªØ¹Ø±Ø¶ Ø§Ù„Ù‚ÙŠÙ…
 @app.get("/latest_status")
 def get_latest_status():
     return latest_status
