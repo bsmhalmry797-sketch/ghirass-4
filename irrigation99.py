@@ -1,32 +1,34 @@
+#!/usr/bin/env python3
 # ============================================================
-#-Smart Irrigation System (AI Model Version)
-# =================================================
-# -------------- Import Libraries -----------
+# ðŸŒ± Ghirass Smart Irrigation â€“ Edge Controller (AI + FastAPI)
+# ============================================================
+
 import warnings
 warnings.filterwarnings("ignore")
 
-import time, math, statistics, csv, os
+import time, math, statistics, csv
 from collections import deque
 from datetime import datetime, timezone
 
 import numpy as np
 import joblib
+import requests
+
 import RPi.GPIO as GPIO
 import spidev, board, adafruit_dht
-import requests   # NEW: to send data to backend
 
-# ----------- Backend URL -----------
-BACKEND_URL = "https://ghirass-4.onrender.com"  # Ø¹Ø¯Ù„ÙŠ Ø§Ù„Ø±Ø§Ø¨Ø· Ø¥Ø°Ø§ ÙŠØ®ØªÙ„Ù
 
-# ----------- User Settings -----------
-MODEL_PATH = "/home/ghirass/ghirass-ai/models/irrigation_model_merged.pkl"
+MODEL_PATH = "irrigation_model_merged.pkl"
+
+API_URL = "https://ghirass-4.onrender.com"
+
 RELAY_PIN = 17
 ACTIVE_HIGH = True
 DRY_RUN = False
 SOIL_CH = 0
 
-WET = 233
-DRY = 619
+WET = 233   
+DRY = 619   
 
 THRESH_OVERRIDE = None
 EMERGENCY_ON_PCT = 20.0
@@ -39,7 +41,7 @@ MAX_ON_SEC = 60
 MAX_MIN_PER_HOUR = 8
 HOURLY_BUCKET = 3600
 
-# ----------- Load AI Model -----------
+
 try:
     bundle = joblib.load(MODEL_PATH)
     MODEL = bundle["model"]
@@ -47,12 +49,14 @@ try:
     THRESH = bundle.get("threshold", 0.06)
     if THRESH_OVERRIDE is not None:
         THRESH = float(THRESH_OVERRIDE)
+    print(f"[MODEL] Loaded OK | THRESH={THRESH:.3f}")
 except Exception as e:
-    print(f"ERROR: Could not load AI model from {MODEL_PATH}. Using default threshold. Error: {e}")
+    print(f"[MODEL] ERROR loading model: {e}")
     MODEL = None
+    FEATURES = []
     THRESH = 0.06
 
-# ----------- Hardware Setup -----------
+
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RELAY_PIN, GPIO.OUT, initial=GPIO.LOW if ACTIVE_HIGH else GPIO.HIGH)
 
@@ -64,7 +68,6 @@ def relay_set(on: bool):
     else:
         GPIO.output(RELAY_PIN, GPIO.LOW if on else GPIO.HIGH)
 
-# MCP3008 ADC
 spi = spidev.SpiDev()
 spi.open(0, 0)
 spi.max_speed_hz = 135000
@@ -78,7 +81,6 @@ def adc_to_pct(v, wet=WET, dry=DRY):
     v = max(min(v, dry), wet)
     return round(100.0 * (dry - v) / (dry - wet), 1)
 
-# DHT22 Sensor
 dht = adafruit_dht.DHT22(board.D4)
 
 def read_dht_safe():
@@ -91,7 +93,7 @@ def read_dht_safe():
         pass
     return None, None
 
-# ----------- Helper Functions -----------
+
 def vpd_kpa(temp_c, rh):
     if (temp_c is None) or (rh is None):
         return None
@@ -99,14 +101,24 @@ def vpd_kpa(temp_c, rh):
     ea = es * (rh / 100.0)
     return es - ea
 
-# ----------- Filters and Buffers -----------
+def send_to_backend(status: dict):
+    """Ø¥Ø±Ø³Ø§Ù„ Ø¢Ø®Ø± Ø­Ø§Ù„Ø© Ø¥Ù„Ù‰ FastAPI backend."""
+    try:
+        r = requests.post(API_URL, json=status, timeout=3)
+        if r.status_code != 200:
+            print("[BACKEND] Error:", r.status_code, r.text)
+    except Exception as e:
+        print("[BACKEND] Could not reach backend:", e)
+
+
 MEDIAN_N = 9
 AVG_WINDOW = 12
 buf = deque(maxlen=AVG_WINDOW)
+
 last_soil = None
 last30 = deque(maxlen=30)
 
-# ----------- Status Variables -----------
+
 pump_on = False
 last_change = time.time()
 on_start = 0.0
@@ -114,14 +126,14 @@ rest_until = 0.0
 hour_window_start = time.time()
 run_sec_this_hour = 0
 
-# ----------- Logging Setup -----------
+
 logfile = "ai_irrigation_log.csv"
-print(f"Smart AI Irrigation Started | THRESH={THRESH:.3f} | ACTIVE_HIGH={ACTIVE_HIGH} | DRY_RUN={DRY_RUN}\n")
+print(f"ðŸŒ± Smart AI Irrigation Started | THRESH={THRESH:.3f}\n")
 
 with open(logfile, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow([
-        "timestamp", "temp_C", "hum_%", "vpd",
+        "timestamp", "temp_C", "hum_%", "vpd_kPa",
         "adc_raw", "soil_%", "soil_ma", "delta_soil",
         "proba", "decision", "reason", "pump_on"
     ])
@@ -129,11 +141,11 @@ with open(logfile, "w", newline="") as f:
     try:
         while True:
             now = time.time()
+
             if now - hour_window_start >= HOURLY_BUCKET:
                 hour_window_start = now
                 run_sec_this_hour = 0
 
-            # Stable soil reading
             vals = [read_adc(SOIL_CH) for _ in range(MEDIAN_N)]
             med = int(statistics.median(vals))
             buf.append(med)
@@ -142,6 +154,7 @@ with open(logfile, "w", newline="") as f:
 
             temp, hum = read_dht_safe()
             vpd = vpd_kpa(temp, hum)
+
             hour = int(datetime.now(timezone.utc).strftime("%H"))
             sin_h = math.sin(2 * math.pi * hour / 24.0)
             cos_h = math.cos(2 * math.pi * hour / 24.0)
@@ -151,33 +164,29 @@ with open(logfile, "w", newline="") as f:
             delta = 0.0 if last_soil is None else soil - last_soil
             last_soil = soil
 
-            # Prepare ML features
             row = {
-                "temperature_C": temp if temp is not None else 25.0,
-                "humidity_air_%": hum if hum is not None else 50.0,
-                "soil_moisture_%": soil,
-                "hour": hour,
-                "sin_hour": sin_h,
-                "cos_hour": cos_h,
+                "temperature_C":    temp if temp is not None else 25.0,
+                "humidity_air_%":   hum if hum is not None else 50.0,
+                "soil_moisture_%":  soil,
+                "hour":             hour,
+                "sin_hour":         sin_h,
+                "cos_hour":         cos_h,
                 "soil_moisture_ma": soil_ma,
-                "delta_soil": delta,
-                "vpd_kPa": vpd if vpd is not None else 1.0,
+                "delta_soil":       delta,
+                "vpd_kPa":          vpd if vpd is not None else 1.0,
             }
 
-            # Run prediction
             proba = 0.0
-            if MODEL:
+            if MODEL is not None and FEATURES:
                 X = np.array([[row.get(f, 0.0) for f in FEATURES]], dtype=float)
                 proba = float(MODEL.predict_proba(X)[0, 1])
 
-            # Decision logic
             decision_ai = (proba >= THRESH)
             decision_emg = (soil <= EMERGENCY_ON_PCT)
             decision_on = decision_ai or decision_emg
             reason = "AI" if decision_ai else ("EMERGENCY" if decision_emg else "NO")
             in_rest = now < rest_until
 
-            # Turn ON pump
             if (not pump_on) and decision_on and (not in_rest) and (now - last_change) >= MIN_OFF_SEC:
                 if (run_sec_this_hour / 60.0) < MAX_MIN_PER_HOUR:
                     relay_set(True)
@@ -185,14 +194,12 @@ with open(logfile, "w", newline="") as f:
                     on_start = now
                     last_change = now
 
-            # Turn OFF after burst
             if pump_on and (now - last_change) >= MIN_ON_SEC and ((now - on_start) >= BURST_ON_SEC):
                 relay_set(False)
                 pump_on = False
                 last_change = now
                 rest_until = now + REST_SEC
 
-            # Safety cutoff
             if pump_on and (now - on_start) >= MAX_ON_SEC:
                 relay_set(False)
                 pump_on = False
@@ -202,39 +209,33 @@ with open(logfile, "w", newline="") as f:
             if pump_on:
                 run_sec_this_hour = min(HOURLY_BUCKET, run_sec_this_hour + 1)
 
-            # ---------- NEW: Send data to backend ----------
-            payload = {
-                "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "temperature": temp,
-                "humidity": hum,
-                "soil_pct": soil,
-                "proba": proba,
-                "pump_on": pump_on,
+            status_payload = {
+                "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds") + "Z",
+                "temperature": float(temp) if temp is not None else None,
+                "humidity": float(hum) if hum is not None else None,
+                "soil_pct": float(round(soil, 1)),
+                "proba": float(round(proba, 3)),
+                "pump_on": bool(pump_on),
                 "reason": reason,
-                "run_sec_this_hour": run_sec_this_hour,
-                "delta_soil": delta,
+                "run_sec_this_hour": int(run_sec_this_hour),
+                "delta_soil": float(round(delta, 2)),
             }
+            send_to_backend(status_payload)
 
-            try:
-                requests.post(BACKEND_URL, json=payload, timeout=2)
-            except Exception as e:
-                print("Failed to send to backend:", e)
-            # ----------------------------------------------
-
-            # Logging
             writer.writerow([
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 temp, hum, round(vpd, 3) if vpd is not None else "",
                 med, round(soil, 1), round(soil_ma, 1), round(delta, 2),
-                round(proba, 3), int(decision_on), reason, int(pump_on),
+                round(proba, 3), int(decision_on), reason, int(pump_on)
             ])
             f.flush()
 
-            print(
+             print(
                 f"{datetime.now().strftime('%H:%M:%S')} | "
-                f"T:{temp if temp else 'NA'}Â°C H:{hum if hum else 'NA'}% "
+                f"T:{temp if temp is not None else 'NA'}Â°C "
+                f"H:{hum if hum is not None else 'NA'}% "
                 f"ADC:{med} Soil:{soil:.1f}% p={proba:.3f} -> "
-                f"{'ðŸŸ¢ ON' if pump_on else 'âšª OFF'} [{reason}]"
+                f"{'ðŸŸ¢ ON' if pump_on else 'âšªï¸ OFF'} [{reason}]"
             )
 
             time.sleep(1.5)
@@ -245,4 +246,4 @@ with open(logfile, "w", newline="") as f:
         relay_set(False)
         GPIO.cleanup()
         spi.close()
-        print("\nSystem stopped safely.\n")
+        print("\nðŸ§¯ System stopped safely.\n")
