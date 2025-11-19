@@ -19,7 +19,7 @@ import requests   # NEW: to send data to backend
 BACKEND_URL = "https://ghirass-4.onrender.com"  # Ø¹Ø¯Ù„ÙŠ Ø§Ù„Ø±Ø§Ø¨Ø· Ø¥Ø°Ø§ ÙŠØ®ØªÙ„Ù
 
 # ----------- User Settings -----------
-MODEL_PATH = "models/irrigation_model_merged.pkl"
+MODEL_PATH = "/home/ghirass/ghirass-ai/models/irrigation_model_merged.pkl"
 RELAY_PIN = 17
 ACTIVE_HIGH = True
 DRY_RUN = False
