@@ -1,5 +1,3 @@
-Flask
-flask-cors
-flask-socketio
-eventlet
-gunicorn
+fastapi
+uvicorn[standard]
+python-multipart
