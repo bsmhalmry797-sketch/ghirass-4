@@ -1,5 +1,4 @@
-# app.py - Real-Time SocketIO Backend Server
-
+# app99.py - Real-Time SocketIO Backend Server1
 from flask import Flask
 from flask_cors import CORS 
 from flask_socketio import SocketIO, emit
@@ -20,13 +19,26 @@ thread = None
 thread_lock = threading.Lock()
 
 # ----------------- Root Route for Status Check -----------------
-@app.route('/')
-def index():
-    """Returns a simple message to confirm the server is running."""
-    # This addresses the "Page Not Found" error when navigating to the base URL
-    return "<h1>Socket.IO Backend is Running!</h1><p>Connect using a Socket.IO client on event 'realtime_update'.</p>"
+from flask import request
+import shared_data_ghirass   # <-- Ù„Ùˆ Ø§Ø³Ù… Ù…Ù„ÙÙƒ shared_data Ø§ÙƒØªØ¨ÙŠÙ‡ shared_data ÙÙ‚Ø·
 
+@app.route('/update_sensor', methods=['POST'])
+def update_sensor():
+    data = request.json or {}
 
+    shared_data_ghirass.latest_status = {
+        "timestamp": data.get("timestamp", "N/A"),
+        "temperature": data.get("temperature", None),
+        "humidity": data.get("humidity", None),
+        "soil_pct": data.get("soil_pct", None),
+        "proba": data.get("proba", None),
+        "pump_on": data.get("pump_on", False),
+        "reason": data.get("reason", "N/A"),
+        "run_sec_this_hour": data.get("run_sec_this_hour", 0),
+        "delta_soil": data.get("delta_soil", 0.0),
+    }
+
+    return {"status": "updated"}
 # ----------------- Background Data Stream Function -----------------
 def background_data_stream():
     """This thread constantly reads shared_data and broadcasts it."""
